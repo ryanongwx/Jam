@@ -1,0 +1,32 @@
+name = "eternal-jam-session"
+main = "src/server.ts"
+compatibility_date = "2026-03-27"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+
+[observability]
+enabled = true
+
+[[durable_objects.bindings]]
+name = "JamRoom"
+class_name = "JamRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["JamRoom"]
+
+# Optional: bind an R2 bucket named "jam-exports" in the dashboard, or remove this block.
+# [[r2_buckets]]
+# binding = "JAM_BUCKET"
+# bucket_name = "jam-exports"
+
+[vars]
+# Demo evolution interval (ms). Override in dashboard for production (30–60 min).
+JAM_EVOLVE_INTERVAL_MS = "2700000"
+
+[assets]
+directory = "./dist/public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
