@@ -34,6 +34,32 @@ function evolveMood(prev: JamMood, plan: DirectorPlan): JamMood {
 }
 
 export class JamRoom extends Agent<Env, JamRoomStateShape> {
+  private static readonly RATE_WINDOW_MS = 60_000;
+  private static readonly RATE_MAX = 6;
+  private static readonly MAX_CMD_LEN = 500;
+  private commandTimestamps: number[] = [];
+
+  private checkRateLimit(): { allowed: boolean; retryAfterMs?: number } {
+    const now = Date.now();
+    this.commandTimestamps = this.commandTimestamps.filter(
+      (t) => now - t < JamRoom.RATE_WINDOW_MS,
+    );
+    if (this.commandTimestamps.length >= JamRoom.RATE_MAX) {
+      const oldest = this.commandTimestamps[0]!;
+      return {
+        allowed: false,
+        retryAfterMs: JamRoom.RATE_WINDOW_MS - (now - oldest),
+      };
+    }
+    this.commandTimestamps.push(now);
+    return { allowed: true };
+  }
+
+  private isGenerating(): boolean {
+    const p = this.state.generationPhase;
+    return p === "directing" || p === "generating";
+  }
+
   initialState: JamRoomStateShape = {
     roomId: "",
     mood: {
@@ -274,6 +300,17 @@ export class JamRoom extends Agent<Env, JamRoomStateShape> {
   ): Promise<VoiceCommandResult> {
     const t = text.trim();
     if (!t) return { ok: false, error: "Empty command" };
+    if (t.length > JamRoom.MAX_CMD_LEN) {
+      return { ok: false, error: `Command too long (max ${JamRoom.MAX_CMD_LEN} chars)` };
+    }
+    if (this.isGenerating()) {
+      return { ok: false, error: "Generation in progress — wait for the current mix to finish" };
+    }
+    const rl = this.checkRateLimit();
+    if (!rl.allowed) {
+      const secs = Math.ceil((rl.retryAfterMs ?? 0) / 1000);
+      return { ok: false, error: `Rate limited — try again in ${secs}s` };
+    }
     return this.runMusicPipeline(t, source);
   }
 
@@ -328,7 +365,14 @@ export class JamRoom extends Agent<Env, JamRoomStateShape> {
   @callable()
   async loadDemoStyle(
     styleId: string,
-  ): Promise<{ ok: boolean; styleId: string }> {
+  ): Promise<{ ok: boolean; styleId: string; error?: string }> {
+    if (this.isGenerating()) {
+      return { ok: false, styleId, error: "Generation in progress" };
+    }
+    const rl = this.checkRateLimit();
+    if (!rl.allowed) {
+      return { ok: false, styleId, error: "Rate limited — slow down" };
+    }
     const presets: Record<string, JamMood & { seed: string }> = {
       "lofi-sunday": {
         genre: "lo-fi hip hop",

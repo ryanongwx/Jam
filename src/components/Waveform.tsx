@@ -51,7 +51,7 @@ export function Waveform({ analyser, color = "#c4a7ff" }: Props) {
     <canvas
       ref={canvasRef}
       width={640}
-      height={120}
+      height={92}
       className="waveform-canvas"
       aria-hidden
     />

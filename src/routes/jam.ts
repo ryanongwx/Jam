@@ -32,15 +32,24 @@ export async function handleJamHttp(
     return json({ id });
   }
 
+  const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
+
   let m = url.pathname.match(/^\/api\/jam\/([^/]+)\/transcribe$/);
   if (m && request.method === "POST") {
     if (!env.ELEVENLABS_API_KEY) {
       return json({ error: "ELEVENLABS_API_KEY not set" }, 500);
     }
+    const contentLength = Number(request.headers.get("content-length") ?? 0);
+    if (contentLength > MAX_AUDIO_BYTES) {
+      return json({ error: "Audio file too large (max 10 MB)" }, 413);
+    }
     const form = await request.formData();
     const file = form.get("audio");
     if (!(file instanceof File)) {
       return json({ error: "Expected multipart field 'audio'" }, 400);
+    }
+    if (file.size > MAX_AUDIO_BYTES) {
+      return json({ error: "Audio file too large (max 10 MB)" }, 413);
     }
     try {
       const text = await transcribeAudioBlob(env.ELEVENLABS_API_KEY, file);

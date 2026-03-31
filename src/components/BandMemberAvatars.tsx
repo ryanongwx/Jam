@@ -11,7 +11,11 @@ export function BandMemberAvatars({ stems, phase }: Props) {
       {stems.map((s) => {
         const pulse = s.level * (phase === "generating" ? 1.25 : 1);
         return (
-          <div key={s.role} className="band-member" title={s.label}>
+          <div
+            key={s.role}
+            className="band-member"
+            title={`${s.label} (${s.role})`}
+          >
             <div
               className="band-orb"
               style={{
@@ -20,7 +24,6 @@ export function BandMemberAvatars({ stems, phase }: Props) {
               }}
             />
             <span className="band-label">{s.label}</span>
-            <span className="band-role">{s.role}</span>
           </div>
         );
       })}

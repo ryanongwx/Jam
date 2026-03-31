@@ -1,5 +1,4 @@
 import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
-import type { DirectorPlan } from "../types";
 
 export function createElevenClient(apiKey: string) {
   return new ElevenLabsClient({ apiKey });
@@ -46,26 +45,13 @@ export function base64ToArrayBuffer(b64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-/** Compose a section (full buffer). Prefer mp3_44100_128 for quality vs size. */
-export async function composeMusicSection(
-  client: ElevenLabsClient,
-  plan: DirectorPlan,
-): Promise<{ buffer: ArrayBuffer; mime: string }> {
-  const stream = await client.music.compose({
-    prompt: plan.elevenMusicPrompt,
-    musicLengthMs: plan.musicLengthMs,
-    modelId: "music_v1",
-    forceInstrumental: plan.forceInstrumental,
-    outputFormat: "mp3_44100_128",
-  });
-  const buffer = await readReadableStreamToBuffer(stream);
-  return { buffer, mime: "audio/mpeg" };
-}
-
 /** Stream chunks to a callback (e.g. RPC streaming or progress). */
 export async function streamMusicSection(
   client: ElevenLabsClient,
-  plan: Pick<DirectorPlan, "elevenMusicPrompt" | "musicLengthMs" | "forceInstrumental">,
+  plan: Pick<
+    import("../types").DirectorPlan,
+    "elevenMusicPrompt" | "musicLengthMs" | "forceInstrumental"
+  >,
   onChunk: (chunk: Uint8Array) => void,
 ): Promise<ArrayBuffer> {
   const stream = await client.music.stream({
@@ -96,7 +82,7 @@ export async function streamMusicSection(
   return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength);
 }
 
-/** Separate stems from a composed buffer (returns streamed multi-part or single — we collect bytes). */
+/** Separate stems from a composed buffer. */
 export async function separateStemsFromBuffer(
   client: ElevenLabsClient,
   buffer: ArrayBuffer,
@@ -151,22 +137,6 @@ export async function transcribeAudioBlob(
   const res = await client.speechToText.convert({
     file: blob,
     modelId: "scribe_v2",
-    enableLogging: true,
   });
   return speechToTextToPlainText(res).trim();
-}
-
-/** TTS for optional “band chatter” / vocal hooks (per-band voices). */
-export async function ttsLine(
-  apiKey: string,
-  voiceId: string,
-  text: string,
-): Promise<ArrayBuffer> {
-  const client = createElevenClient(apiKey);
-  const stream = await client.textToSpeech.convert(voiceId, {
-    text,
-    modelId: "eleven_multilingual_v2",
-    outputFormat: "mp3_44100_128",
-  });
-  return readReadableStreamToBuffer(stream);
 }

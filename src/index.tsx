@@ -2,6 +2,7 @@ import { useAgent } from "agents/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BandMemberAvatars } from "./components/BandMemberAvatars";
+import { HeroBackdrop } from "./components/HeroBackdrop";
 import { CommandHistory } from "./components/CommandHistory";
 import { MemoryTimeline } from "./components/MemoryTimeline";
 import { Waveform } from "./components/Waveform";
@@ -33,6 +34,7 @@ function EternalJamApp() {
   const [status, setStatus] = useState<string>("");
   const [shareUrl, setShareUrl] = useState(() => window.location.href);
   const [liveAnalyser, setLiveAnalyser] = useState<AnalyserNode | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -40,6 +42,12 @@ function EternalJamApp() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
+
+  const connected = roomState !== null;
+  const generating =
+    roomState?.generationPhase === "directing" ||
+    roomState?.generationPhase === "generating";
 
   const agent = useAgent<JamRoomStateShape>({
     agent: "JamRoom",
@@ -75,7 +83,7 @@ function EternalJamApp() {
       setStatus("Playing");
     } catch (e) {
       console.error(e);
-      setStatus("Could not play audio");
+      setStatus("Could not play audio — the room may not have a mix yet");
     }
   }, [roomId, agent]);
 
@@ -122,9 +130,9 @@ function EternalJamApp() {
 
   useEffect(() => () => stopMic(), [stopMic]);
 
-  const startRecording = async () => {
-    if (recording) return;
-    setStatus("Listening…");
+  const startRecording = useCallback(async () => {
+    if (recording || busy) return;
+    setStatus("Listening… (release to send)");
     await ensureMicGraph();
     const stream = mediaStreamRef.current;
     if (!stream) return;
@@ -136,9 +144,9 @@ function EternalJamApp() {
     };
     rec.start();
     setRecording(true);
-  };
+  }, [recording, busy, ensureMicGraph]);
 
-  const stopRecordingAndSend = async () => {
+  const stopRecordingAndSend = useCallback(async () => {
     if (!recording) return;
     const rec = recorderRef.current;
     if (!rec) return;
@@ -172,7 +180,31 @@ function EternalJamApp() {
     if (!r.ok) setStatus(r.error ?? "Command failed");
     else setStatus("Got it.");
     stopMic();
-  };
+  }, [recording, roomId, agent, stopMic]);
+
+  // Spacebar push-to-talk (only when not focused on a text input)
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      void startRecording();
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      void stopRecordingAndSend();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, [startRecording, stopRecordingAndSend]);
 
   const sendText = async () => {
     const t = textCmd.trim();
@@ -200,9 +232,12 @@ function EternalJamApp() {
     setBusy(true);
     setStatus("Demo style…");
     await agent.ready;
-    await agent.call("loadDemoStyle", [id]);
+    const r = (await agent.call("loadDemoStyle", [id])) as {
+      ok: boolean;
+      error?: string;
+    };
     setBusy(false);
-    setStatus("Demo rolling");
+    setStatus(r.ok ? "Demo rolling" : r.error ?? "Demo failed");
   };
 
   const exportTrack = async () => {
@@ -221,6 +256,12 @@ function EternalJamApp() {
     );
   };
 
+  const copyShareLink = () => {
+    navigator.clipboard.writeText(shareUrl);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+  };
+
   const moodLine = useMemo(() => {
     if (!roomState) return "Connecting to jam room…";
     const { mood, generationPhase, lastError } = roomState;
@@ -230,21 +271,25 @@ function EternalJamApp() {
   return (
     <div className="app">
       <header className="hero">
-        <div>
-          <h1>Eternal Jam Session</h1>
-          <p className="tag">
-            Voice-direct an AI band. The room remembers every prompt, evolves
-            while you are away, and syncs in realtime across collaborators.
-          </p>
+        <div className="hero-main">
+          <HeroBackdrop />
+          <div className="hero-text">
+            <h1>Eternal Jam Session</h1>
+            <p className="tag">
+              Voice-direct an AI band. The room remembers every prompt, evolves
+              while you are away, and syncs in realtime across collaborators.
+            </p>
+          </div>
         </div>
         <div className="pill-row">
-          <span className="pill">Cloudflare Agents + Durable Objects</span>
-          <span className="pill">Workers AI director</span>
-          <span className="pill">ElevenLabs Music · STT · SFX · TTS</span>
+          <span className={`conn-dot ${connected ? "connected" : ""}`} />
+          <span className="pill">{connected ? `Room: ${roomId}` : "Connecting…"}</span>
+          <span className="pill">Cloudflare Agents + DO</span>
+          <span className="pill">ElevenLabs Music · STT · SFX</span>
         </div>
       </header>
 
-      <section className="panel">
+      <section className={`panel ${generating ? "panel-generating" : ""}`}>
         <Waveform analyser={liveAnalyser} />
         {roomState && (
           <BandMemberAvatars
@@ -252,90 +297,111 @@ function EternalJamApp() {
             phase={roomState.generationPhase}
           />
         )}
-        <p className="status-line">{moodLine}</p>
-        {roomState?.lastError ? (
-          <p className="error">{roomState.lastError}</p>
-        ) : null}
 
-        <div className="controls">
-          <input
-            type="text"
-            placeholder='Try: "make the sax argue with the drums"'
-            value={textCmd}
-            onChange={(e) => setTextCmd(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !busy && void sendText()}
-            disabled={busy}
-          />
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={busy}
-            onClick={() => void sendText()}
-          >
-            Send
-          </button>
-          <button
-            type="button"
-            className={`btn-mic ${recording ? "recording" : ""}`}
-            disabled={busy}
-            onMouseDown={() => void startRecording()}
-            onMouseUp={() => void stopRecordingAndSend()}
-            onMouseLeave={() => recording && void stopRecordingAndSend()}
-            onTouchStart={(e) => {
-              e.preventDefault();
-              void startRecording();
-            }}
-            onTouchEnd={() => void stopRecordingAndSend()}
-          >
-            Hold to talk
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            disabled={busy}
-            onClick={() => void playLatestMix()}
-          >
-            Play last mix
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            disabled={busy}
-            onClick={() => void exportTrack()}
-          >
-            Export to R2
-          </button>
+        {generating && (
+          <div className="gen-bar">
+            <div className="gen-bar-fill" />
+            <span className="gen-bar-label">
+              {roomState?.generationPhase === "directing"
+                ? "AI is planning the next section…"
+                : "Generating music…"}
+            </span>
+          </div>
+        )}
+
+        <div className="panel-meta">
+          <p className="status-line">{moodLine}</p>
+          {roomState?.lastError ? (
+            <p className="error">{roomState.lastError}</p>
+          ) : null}
         </div>
 
-        <div className="share-field">
-          <button type="button" className="btn-ghost" onClick={() => void createRoom()}>
-            New room
-          </button>
-          <input readOnly value={shareUrl} aria-label="Share link" />
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => navigator.clipboard.writeText(shareUrl)}
-          >
-            Copy link
-          </button>
-        </div>
-
-        <div className="demo-row">
-          <span className="muted">Demo styles:</span>
-          {(["lofi-sunday", "neon-night", "soul-basement"] as const).map((id) => (
+        <div className="control-suite">
+          <div className="controls">
+            <input
+              ref={textInputRef}
+              type="text"
+              className="control-input"
+              placeholder='Try: "make the sax argue with the drums"'
+              value={textCmd}
+              onChange={(e) => setTextCmd(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !busy && void sendText()}
+              disabled={busy}
+              maxLength={500}
+            />
             <button
-              key={id}
+              type="button"
+              className="btn-primary"
+              disabled={busy || !textCmd.trim()}
+              onClick={() => void sendText()}
+            >
+              Send
+            </button>
+            <button
+              type="button"
+              className={`btn-mic ${recording ? "recording" : ""}`}
+              disabled={busy}
+              onMouseDown={() => void startRecording()}
+              onMouseUp={() => void stopRecordingAndSend()}
+              onMouseLeave={() => recording && void stopRecordingAndSend()}
+              onTouchStart={(e) => {
+                e.preventDefault();
+                void startRecording();
+              }}
+              onTouchEnd={() => void stopRecordingAndSend()}
+              aria-label="Hold to talk — or press spacebar"
+            >
+              {recording ? "Release to send" : "Hold to talk"}
+            </button>
+            <button
               type="button"
               className="btn-ghost"
               disabled={busy}
-              onClick={() => void runDemo(id)}
+              onClick={() => void playLatestMix()}
             >
-              {id.replace(/-/g, " ")}
+              Play last mix
             </button>
-          ))}
+          </div>
+
+          <div className="share-field">
+            <button type="button" className="btn-ghost" onClick={() => void createRoom()}>
+              New room
+            </button>
+            <input readOnly value={shareUrl} aria-label="Share link" />
+            <button type="button" className="btn-ghost" onClick={copyShareLink}>
+              {copied ? "Copied!" : "Copy link"}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost"
+              disabled={busy}
+              onClick={() => void exportTrack()}
+            >
+              Export
+            </button>
+          </div>
+
+          <div className="demo-row">
+            <span className="muted demo-label">Demo styles</span>
+            {(["lofi-sunday", "neon-night", "soul-basement"] as const).map((id) => (
+              <button
+                key={id}
+                type="button"
+                className="btn-ghost btn-ghost--compact"
+                disabled={busy}
+                onClick={() => void runDemo(id)}
+              >
+                {id.replace(/-/g, " ")}
+              </button>
+            ))}
+          </div>
+
+          {status ? <p className="status-line status-line--suite">{status}</p> : null}
+
+          <p className="hint muted">
+            Spacebar works as push-to-talk when focus is outside the text input.
+          </p>
         </div>
-        {status ? <p className="status-line">{status}</p> : null}
       </section>
 
       <div className="grid-2">
@@ -348,11 +414,6 @@ function EternalJamApp() {
       </div>
 
       <audio ref={audioRef} className="visually-hidden" controls={false} />
-
-      <p className="muted" style={{ marginTop: "2rem", fontSize: "0.8rem" }}>
-        Tip: add <code>ELEVENLABS_API_KEY</code> to <code>.dev.vars</code> before
-        first compose. Optional: bind R2 as <code>JAM_BUCKET</code> for exports.
-      </p>
     </div>
   );
 }
